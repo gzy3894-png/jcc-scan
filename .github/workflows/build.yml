@@ -1,0 +1,78 @@
+name: Build arm64
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+          add-to-path: true
+
+      - name: ndk-build
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -e
+          # 标准布局：仓库根为 NDK_PROJECT_PATH，jni/ 下放 mk
+          "$NDK/ndk-build" -j"$(nproc)" NDK_PROJECT_PATH="$PWD" APP_BUILD_SCRIPT="$PWD/jni/Android.mk" NDK_APPLICATION_MK="$PWD/jni/Application.mk"
+          echo "== libs =="
+          find libs obj -type f | head -50
+          ls -la libs/arm64-v8a/
+
+      - name: Stage package
+        run: |
+          set -e
+          mkdir -p dist/jcc-scan-phone
+          cp -f libs/arm64-v8a/jcc-scan dist/jcc-scan-phone/
+          cp -f libs/arm64-v8a/libJCC.so dist/jcc-scan-phone/
+          # 注入器（真机 ptrace）
+          if [ -f bin/JCC.sh ]; then
+            cp -f bin/JCC.sh dist/jcc-scan-phone/
+          else
+            echo "WARN: bin/JCC.sh missing"
+          fi
+          cp -f scripts/开始扫描.sh dist/jcc-scan-phone/ 2>/dev/null || cp -f scripts/run-on-phone.sh dist/jcc-scan-phone/开始扫描.sh
+          chmod 755 dist/jcc-scan-phone/jcc-scan dist/jcc-scan-phone/开始扫描.sh dist/jcc-scan-phone/JCC.sh || true
+          printf '%s\n' "jcc-scan phone package" "build=$(git rev-parse --short HEAD)" "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/jcc-scan-phone/BUILD.txt
+          (cd dist && zip -r jcc-scan-phone-arm64.zip jcc-scan-phone)
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jcc-scan-phone-arm64
+          path: dist/jcc-scan-phone-arm64.zip
+
+      - name: Create/Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: jcc-scan phone arm64 (run ${{ github.run_number }})
+          body: |
+            ## 手机使用
+            1. 解压 zip 到手机 `/sdcard/jcc-scan/`
+            2. 打开金铲铲
+            3. Root 终端执行：
+            ```
+            su
+            sh /sdcard/jcc-scan/开始扫描.sh
+            ```
+            4. 进大厅或打一局，等到提示 **已完成**
+            5. 把 `/sdcard/Download/jcc-scan/` 整夹发回电脑
+          files: dist/jcc-scan-phone-arm64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

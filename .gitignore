@@ -1,0 +1,9 @@
+obj/
+libs/
+local.properties
+.idea/
+*.iml
+out/
+native/build*/
+**/build-arm64/
+.DS_Store
