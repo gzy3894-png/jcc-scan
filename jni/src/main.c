@@ -216,14 +216,46 @@ static int so_status_alive(char *last, size_t lastsz) {
     return 0;
 }
 
+/* root 把游戏私有目录结果拷到 sdcard，方便用户取 */
+static void harvest_from_game(void) {
+    char cmd[900];
+    ensure_dir(g_out);
+    snprintf(cmd, sizeof(cmd),
+             "cp -f '%s/jcc-scan/'* '%s/' 2>/dev/null; "
+             "cp -f '%s/jcc_scan_status.txt' '%s/jcc_scan_status.txt' 2>/dev/null; "
+             "cp -f '%s/jcc-scan/DONE' '%s/DONE' 2>/dev/null; "
+             "cp -f '%s/jcc-scan/offsets.h' '%s/offsets.h' 2>/dev/null; "
+             "cp -f '%s/jcc-scan/scan_report.json' '%s/scan_report.json' 2>/dev/null; "
+             "cp -f '%s/jcc-scan/SCAN_REPORT.txt' '%s/SCAN_REPORT.txt' 2>/dev/null; "
+             "cp -f '%s/jcc-scan/status.txt' '%s/status_from_game.txt' 2>/dev/null; "
+             "chmod 666 '%s/'* 2>/dev/null; true",
+             GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out,
+             GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out, g_out);
+    run_cmd(cmd);
+}
+
 static int done_exists(void) {
     char p[320];
+    /* 先从游戏目录收割（app 只写得了这里） */
+    harvest_from_game();
     snprintf(p, sizeof(p), "%s/DONE", g_out);
     if (file_exists(p)) return 1;
     snprintf(p, sizeof(p), "%s/jcc-scan/DONE", GAME_FILES);
     if (file_exists(p)) return 1;
     snprintf(p, sizeof(p), "%s/jcc_scan_status.txt", GAME_FILES);
     if (file_contains(p, "SCAN_OK")) return 1;
+    snprintf(p, sizeof(p), "%s/offsets.h", g_out);
+    if (file_exists(p)) {
+        char donep[320];
+        FILE *d;
+        snprintf(donep, sizeof(donep), "%s/DONE", g_out);
+        d = fopen(donep, "w");
+        if (d) {
+            fprintf(d, "OK harvested offsets.h\n");
+            fclose(d);
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -486,19 +518,23 @@ static int wait_scan_done(int max_sec) {
     int i;
     char last[256] = {0};
     char prev[256] = {0};
-    host_log("等待扫描完成（请停在登录/大厅，不要排队进局）...");
+    host_log("等待扫描完成（停登录/大厅）。结果在游戏 files，root 会拷到 sdcard...");
     for (i = 0; i < max_sec; i++) {
         int pid;
 
+        if ((i % 3) == 0) harvest_from_game();
+
         if (done_exists()) {
-            host_log("检测到 DONE / SCAN_OK");
+            host_log("检测到 DONE / SCAN_OK / offsets.h");
+            harvest_from_game();
             return 1;
         }
 
         pid = pidof_pkg();
         if (pid <= 0 && i > 5) {
-            host_log("ERROR: 扫描过程中游戏退出");
-            return 0;
+            host_log("ERROR: 扫描过程中游戏退出 — 收割已有产物");
+            harvest_from_game();
+            return done_exists();
         }
 
         last[0] = 0;
@@ -507,22 +543,24 @@ static int wait_scan_done(int max_sec) {
             printf("[jcc-scan] 进度: %s\n", last);
             fflush(stdout);
             snprintf(prev, sizeof(prev), "%s", last);
-        } else if ((i + 1) % 15 == 0) {
-            printf("[jcc-scan] ... %ds  last=%s  PID=%d\n", i + 1, last[0] ? last : "(等待 SO 输出)",
+        } else if ((i + 1) % 10 == 0) {
+            printf("[jcc-scan] ... %ds  last=%s  PID=%d\n", i + 1, last[0] ? last : "(等游戏 files 状态)",
                    pid);
             fflush(stdout);
+            /* 同步展示游戏私有 status 尾部 */
+            system("tail -3 /data/user/0/com.tencent.jkchess/files/jcc_scan_status.txt 2>/dev/null");
         }
 
-        /* 若 maps 丢了 libJCC 且一直无 status，提前失败 */
-        if (i == 45 && pid > 0) {
+        if (i == 40 && pid > 0) {
             int maps_ok = maps_has_substr(pid, "libJCC");
             if (!maps_ok && !last[0]) {
-                host_log("ERROR: 45s 仍无 libJCC 映射且无状态，中止等待");
+                host_log("ERROR: 40s 无 libJCC 且无 status，中止");
                 return 0;
             }
         }
         sleep(1);
     }
+    harvest_from_game();
     return done_exists();
 }
 
@@ -538,6 +576,8 @@ static void dump_diagnostics(void) {
     system(cmd);
     system("echo '--- status game files ---'; cat '" GAME_FILES
            "/jcc_scan_status.txt' 2>/dev/null | tail -40");
+    system("echo '--- game jcc-scan dir ---'; ls -la '" GAME_FILES
+           "/jcc-scan/' 2>/dev/null");
     snprintf(cmd, sizeof(cmd), "echo '--- inject_log ---'; cat '%s/inject_log.txt' 2>/dev/null | tail -40",
              g_out);
     system(cmd);
