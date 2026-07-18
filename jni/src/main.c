@@ -216,21 +216,26 @@ static int so_status_alive(char *last, size_t lastsz) {
     return 0;
 }
 
-/* root 把游戏私有目录结果拷到 sdcard，方便用户取 */
+/* root 从所有可能目录收割到 sdcard */
 static void harvest_from_game(void) {
-    char cmd[900];
+    char cmd[1600];
     ensure_dir(g_out);
     snprintf(cmd, sizeof(cmd),
-             "cp -f '%s/jcc-scan/'* '%s/' 2>/dev/null; "
-             "cp -f '%s/jcc_scan_status.txt' '%s/jcc_scan_status.txt' 2>/dev/null; "
-             "cp -f '%s/jcc-scan/DONE' '%s/DONE' 2>/dev/null; "
-             "cp -f '%s/jcc-scan/offsets.h' '%s/offsets.h' 2>/dev/null; "
-             "cp -f '%s/jcc-scan/scan_report.json' '%s/scan_report.json' 2>/dev/null; "
-             "cp -f '%s/jcc-scan/SCAN_REPORT.txt' '%s/SCAN_REPORT.txt' 2>/dev/null; "
-             "cp -f '%s/jcc-scan/status.txt' '%s/status_from_game.txt' 2>/dev/null; "
-             "chmod 666 '%s/'* 2>/dev/null; true",
-             GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out,
-             GAME_FILES, g_out, GAME_FILES, g_out, GAME_FILES, g_out, g_out);
+             "OUT='%s'; "
+             "for d in /data/user/*/com.tencent.jkchess/files /data/data/com.tencent.jkchess/files "
+             "         /data/local/tmp/jcc-scan-out; do "
+             "  [ -e \"$d\" ] || continue; "
+             "  cp -f \"$d/jcc_scan_status.txt\" \"$OUT/jcc_scan_status.txt\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/\"* \"$OUT/\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/status.txt\" \"$OUT/status_from_game.txt\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/DONE\" \"$OUT/DONE\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/offsets.h\" \"$OUT/offsets.h\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/SCAN_REPORT.txt\" \"$OUT/SCAN_REPORT.txt\" 2>/dev/null; "
+             "  cp -f \"$d/jcc-scan/scan_report.json\" \"$OUT/scan_report.json\" 2>/dev/null; "
+             "done; "
+             "cp -f /data/local/tmp/jcc_scan_alive.txt \"$OUT/jcc_scan_alive.txt\" 2>/dev/null; "
+             "chmod 666 \"$OUT/\"* 2>/dev/null; true",
+             g_out);
     run_cmd(cmd);
 }
 
@@ -291,6 +296,23 @@ static void clear_old_results(void) {
     run_cmd(cmd);
 }
 
+/* 给 app uid 准备可写目录（root 先建 + 777） */
+static void prepare_app_writable(void) {
+    host_log("准备 app 可写目录 (chmod 777)...");
+    run_cmd("mkdir -p /data/local/tmp/jcc-scan-out && chmod 777 /data/local/tmp/jcc-scan-out");
+    run_cmd("rm -f /data/local/tmp/jcc_scan_alive.txt; "
+            "touch /data/local/tmp/jcc_scan_alive.txt; chmod 666 /data/local/tmp/jcc_scan_alive.txt");
+    /* 扫描所有 user 下的金铲铲 data */
+    run_cmd("for d in /data/user/*/com.tencent.jkchess/files /data/data/com.tencent.jkchess/files; do "
+            "  [ -d \"$d\" ] || continue; "
+            "  mkdir -p \"$d/jcc-scan\"; "
+            "  chmod 777 \"$d\" \"$d/jcc-scan\" 2>/dev/null; "
+            "  touch \"$d/jcc_scan_status.txt\" 2>/dev/null; "
+            "  chmod 666 \"$d/jcc_scan_status.txt\" \"$d/jcc-scan/status.txt\" 2>/dev/null; "
+            "  echo prepared > \"$d/jcc-scan/host_prepared.txt\" 2>/dev/null; "
+            "done");
+}
+
 static int deploy(void) {
     char src_inj[600], src_so[600], cmd[1600];
     snprintf(src_inj, sizeof(src_inj), "%s/%s", g_self_dir, INJ_NAME);
@@ -307,7 +329,6 @@ static int deploy(void) {
         return -1;
     }
 
-    /* 校验 so 非空 */
     {
         struct stat st;
         if (stat(src_so, &st) != 0 || st.st_size < 4096) {
@@ -328,12 +349,12 @@ static int deploy(void) {
         host_log("ERROR: 部署到 /data/local/tmp 失败");
         return -1;
     }
-    /* 确认落盘 */
     if (!file_exists(TMP_DIR "/" INJ_NAME) || !file_exists(TMP_DIR "/" SO_NAME)) {
         host_log("ERROR: /data/local/tmp 部署校验失败");
         return -1;
     }
     host_log("部署完成: /data/local/tmp/JCC.sh + libJCC.so");
+    prepare_app_writable();
     return 0;
 }
 
@@ -472,13 +493,30 @@ static int do_inject(int pid) {
  *  B) SO status 写出 alive 关键字
  *  超时则失败，绝不假装成功
  */
+static int canary_alive(void) {
+    harvest_from_game();
+    if (file_contains("/data/local/tmp/jcc_scan_alive.txt", "ALIVE") ||
+        file_contains("/data/local/tmp/jcc_scan_alive.txt", "constructor") ||
+        file_contains("/data/local/tmp/jcc-scan-out/status.txt", "ALIVE") ||
+        file_contains("/data/local/tmp/jcc-scan-out/status.txt", "constructor"))
+        return 1;
+    /* 任意 user */
+    if (run_cmd("grep -qE 'ALIVE|constructor|SCAN_OK|boot' "
+                "/data/user/*/com.tencent.jkchess/files/jcc_scan_status.txt "
+                "/data/user/*/com.tencent.jkchess/files/jcc-scan/status.txt "
+                "/data/data/com.tencent.jkchess/files/jcc_scan_status.txt "
+                "2>/dev/null") == 0)
+        return 1;
+    return 0;
+}
+
 static int verify_inject(int max_sec) {
     int i;
     char last[256];
-    host_log("校验注入是否成功...");
+    host_log("校验注入（maps + canary 文件）...");
     for (i = 0; i < max_sec; i++) {
         int pid = pidof_pkg();
-        int maps_ok = 0, status_ok = 0;
+        int maps_ok = 0, status_ok = 0, canary = 0;
 
         if (pid <= 0) {
             if (i >= 3) {
@@ -493,24 +531,36 @@ static int verify_inject(int max_sec) {
                   maps_has_substr(pid, "/data/local/tmp/libJCC");
         last[0] = 0;
         status_ok = so_status_alive(last, sizeof(last));
+        canary = canary_alive();
 
-        if (maps_ok || status_ok) {
-            printf("[jcc-scan] 注入确认成功 (+%ds)\n", i + 1);
-            printf("[jcc-scan]   maps_libJCC=%d  so_status=%d\n", maps_ok, status_ok);
-            if (last[0]) printf("[jcc-scan]   so_status_last: %s\n", last);
+        /* 强条件：要有 canary/status，不能只靠 maps（防假阳性） */
+        if (canary || status_ok) {
+            printf("[jcc-scan] SO 已执行 (+%ds) maps=%d canary=%d status=%d\n", i + 1, maps_ok,
+                   canary, status_ok);
+            if (last[0]) printf("[jcc-scan]   last: %s\n", last);
             fflush(stdout);
-            host_log("注入校验通过");
+            host_log("注入校验通过（SO 代码已跑）");
             return pid;
         }
 
         if ((i + 1) % 3 == 0) {
-            printf("[jcc-scan] 校验中... %ds  PID=%d maps=0 status=0 last=%s\n", i + 1, pid,
-                   last[0] ? last : "(无)");
+            printf("[jcc-scan] 校验中... %ds PID=%d maps=%d canary=0\n", i + 1, pid, maps_ok);
             fflush(stdout);
+            if (maps_ok && i >= 6) {
+                host_log("警告: maps 有 libJCC 但无 canary — constructor 可能未跑/秒崩");
+                system("logcat -d -t 80 2>/dev/null | grep -iE 'JccScan|libJCC|linker|dlopen' | "
+                       "tail -30");
+            }
         }
         sleep(1);
     }
-    host_log("ERROR: 注入校验失败 — maps 无 libJCC 且无 SO 状态文件");
+
+    host_log("ERROR: 无 canary — SO 未真正执行");
+    system("echo '=== alive ==='; cat /data/local/tmp/jcc_scan_alive.txt 2>/dev/null; "
+           "echo '=== status any ==='; "
+           "cat /data/user/*/com.tencent.jkchess/files/jcc_scan_status.txt 2>/dev/null | tail -20; "
+           "echo '=== logcat ==='; logcat -d -t 100 2>/dev/null | "
+           "grep -iE 'JccScan|libJCC|dlopen|linker' | tail -40");
     return -1;
 }
 

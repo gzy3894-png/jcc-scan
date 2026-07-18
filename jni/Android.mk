@@ -13,7 +13,9 @@ LOCAL_SRC_FILES := \
 LOCAL_C_INCLUDES := \
     $(LOCAL_PATH)/include \
     $(LOCAL_PATH)/xdl/include
-LOCAL_CFLAGS := -O2 -fvisibility=hidden -DANDROID -Wall
+# 保留默认可见，确保 constructor / JNI_OnLoad / jcc_scan_entry 不被裁掉
+LOCAL_CFLAGS := -O2 -DANDROID -Wall -fno-emulated-tls
+LOCAL_LDFLAGS := -Wl,--export-dynamic
 LOCAL_LDLIBS := -llog -ldl
 include $(BUILD_SHARED_LIBRARY)
 
