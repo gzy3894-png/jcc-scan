@@ -21,15 +21,23 @@ jobs:
           ndk-version: r26d
           add-to-path: true
 
+      - name: Syntax-check shell scripts
+        run: |
+          set -e
+          # LF only + bash -n
+          for f in scripts/run-on-phone.sh scripts/start.sh; do
+            sed -i 's/\r$//' "$f"
+            bash -n "$f"
+            echo "OK syntax $f"
+          done
+
       - name: ndk-build
         env:
           NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           set -e
-          # 标准布局：仓库根为 NDK_PROJECT_PATH，jni/ 下放 mk
           "$NDK/ndk-build" -j"$(nproc)" NDK_PROJECT_PATH="$PWD" APP_BUILD_SCRIPT="$PWD/jni/Android.mk" NDK_APPLICATION_MK="$PWD/jni/Application.mk"
           echo "== libs =="
-          find libs obj -type f | head -50
           ls -la libs/arm64-v8a/
 
       - name: Stage package
@@ -38,17 +46,25 @@ jobs:
           mkdir -p dist/jcc-scan-phone
           cp -f libs/arm64-v8a/jcc-scan dist/jcc-scan-phone/
           cp -f libs/arm64-v8a/libJCC.so dist/jcc-scan-phone/
-          # 注入器（真机 ptrace）
           if [ -f bin/JCC.sh ]; then
             cp -f bin/JCC.sh dist/jcc-scan-phone/
           else
             echo "WARN: bin/JCC.sh missing"
           fi
-          cp -f scripts/开始扫描.sh dist/jcc-scan-phone/ 2>/dev/null || cp -f scripts/run-on-phone.sh dist/jcc-scan-phone/开始扫描.sh
-          chmod 755 dist/jcc-scan-phone/jcc-scan dist/jcc-scan-phone/开始扫描.sh dist/jcc-scan-phone/JCC.sh || true
+          # ASCII-only entry scripts (avoid Windows/Chinese path encoding break)
+          cp -f scripts/run-on-phone.sh dist/jcc-scan-phone/
+          cp -f scripts/start.sh dist/jcc-scan-phone/
+          # also ship as start-scan.sh alias
+          cp -f scripts/run-on-phone.sh dist/jcc-scan-phone/start-scan.sh
+          sed -i 's/\r$//' dist/jcc-scan-phone/*.sh
+          chmod 755 dist/jcc-scan-phone/jcc-scan dist/jcc-scan-phone/*.sh dist/jcc-scan-phone/JCC.sh || true
+          # syntax check packaged copies again
+          bash -n dist/jcc-scan-phone/run-on-phone.sh
+          bash -n dist/jcc-scan-phone/start.sh
+          bash -n dist/jcc-scan-phone/start-scan.sh
           printf '%s\n' "jcc-scan phone package" "build=$(git rev-parse --short HEAD)" "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/jcc-scan-phone/BUILD.txt
           (cd dist && zip -r jcc-scan-phone-arm64.zip jcc-scan-phone)
-          ls -la dist/
+          ls -la dist/ dist/jcc-scan-phone/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -62,16 +78,18 @@ jobs:
           tag_name: v0.1.${{ github.run_number }}
           name: jcc-scan phone arm64 (run ${{ github.run_number }})
           body: |
-            ## 手机使用
-            1. 解压 zip 到手机 `/sdcard/jcc-scan/`
-            2. 打开金铲铲
-            3. Root 终端执行：
+            ## Phone usage
+            1. Unzip to `/sdcard/jcc-scan/`
+            2. Root terminal:
             ```
             su
-            sh /sdcard/jcc-scan/开始扫描.sh
+            sh /sdcard/jcc-scan/run-on-phone.sh
             ```
-            4. 进大厅或打一局，等到提示 **已完成**
-            5. 把 `/sdcard/Download/jcc-scan/` 整夹发回电脑
+            (or `start.sh` / `start-scan.sh`)
+            3. Do NOT open game first; script cold-starts it. Stay on login/lobby.
+            4. When DONE, send `/sdcard/Download/jcc-scan/` folder.
+
+            Note: entry scripts are ASCII-only (previous Chinese-named script broke quotes under Windows encoding).
           files: dist/jcc-scan-phone-arm64.zip
           generate_release_notes: true
         env:
