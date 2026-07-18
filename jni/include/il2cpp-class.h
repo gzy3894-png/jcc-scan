@@ -114,7 +114,8 @@ typedef struct Il2CppType {
     union {
         void *dummy;
         TypeDefinitionIndex klassIndex;
-        const Il2CppType *type;
+        /* C 里 typedef 未完成时要用 struct 标签自引用 */
+        const struct Il2CppType *type;
         Il2CppArrayType *array;
         GenericParameterIndex genericParameterIndex;
         Il2CppGenericClass *generic_class;
