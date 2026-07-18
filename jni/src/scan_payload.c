@@ -10,13 +10,16 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
-#define DO_API(r, n, p) r (*n) p
+/* 函数指针声明：注意括号，纯 C 必须 stdbool */
+#define DO_API(r, n, p) r (*n) p;
 #include "il2cpp-api-functions.h"
 #undef DO_API
 
@@ -76,9 +79,11 @@ static void status(const char *msg) {
 }
 
 static void init_api(void *handle) {
-#define DO_API(r, n, p)                       \
-    n = (r(*) p)xdl_sym(handle, #n, 0);       \
-    if (!n) LOGW("missing api %s", #n);
+#define DO_API(r, n, p)                         \
+    do {                                        \
+        n = (r(*) p)xdl_sym(handle, #n, 0);     \
+        if (!n) LOGW("missing api %s", #n);     \
+    } while (0)
 #include "il2cpp-api-functions.h"
 #undef DO_API
     if (il2cpp_domain_get_assemblies) {
