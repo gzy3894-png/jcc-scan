@@ -19,10 +19,11 @@ LOCAL_LDFLAGS := -Wl,--export-dynamic
 LOCAL_LDLIBS := -llog -ldl
 include $(BUILD_SHARED_LIBRARY)
 
-# ---- 可执行文件：用户 root 运行 ----
+# ---- 可执行文件：用户 root 运行（含自研 ptrace 注入）----
 include $(CLEAR_VARS)
 LOCAL_MODULE := jcc-scan
-LOCAL_SRC_FILES := src/main.c
+LOCAL_SRC_FILES := src/main.c src/inject_dlopen.c
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
 LOCAL_CFLAGS := -O2 -Wall -DANDROID
+LOCAL_LDLIBS := -ldl
 include $(BUILD_EXECUTABLE)

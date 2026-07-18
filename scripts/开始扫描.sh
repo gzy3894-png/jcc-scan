@@ -1,39 +1,39 @@
 #!/system/bin/sh
-# 金铲铲数据扫描 — 只跑这一条（无 UI，终端进度）
+# 閲戦摬閾叉暟鎹壂鎻?鈥?鍙窇杩欎竴鏉★紙鏃?UI锛岀粓绔繘搴︼級
 #   su
-#   sh /sdcard/jcc-scan/开始扫描.sh
+#   sh /sdcard/jcc-scan/寮€濮嬫壂鎻?sh
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN="$DIR/jcc-scan"
 
 echo ""
 echo "============================================"
-echo "  JCC Scan  开始"
-echo "  目录: $DIR"
+echo "  JCC Scan  寮€濮?
+echo "  鐩綍: $DIR"
 echo "============================================"
 echo ""
 
 if [ ! -f "$BIN" ]; then
-  echo "[错误] 找不到 jcc-scan"
-  echo "需要同目录: jcc-scan  libJCC.so  JCC.sh  开始扫描.sh"
+  echo "[閿欒] 鎵句笉鍒?jcc-scan"
+  echo "闇€瑕佸悓鐩綍: jcc-scan  libJCC.so  JCC.sh  寮€濮嬫壂鎻?sh"
   exit 1
 fi
 chmod 755 "$DIR/jcc-scan" "$DIR/JCC.sh" 2>/dev/null
 chmod 755 "$DIR/libJCC.so" 2>/dev/null
 
 id | grep -q "uid=0" || {
-  echo "[错误] 需要 root。请先 su，再执行本脚本。"
+  echo "[閿欒] 闇€瑕?root銆傝鍏?su锛屽啀鎵ц鏈剼鏈€?
   exit 1
 }
 
 if [ ! -f "$DIR/libJCC.so" ] || [ ! -f "$DIR/JCC.sh" ]; then
-  echo "[错误] 缺少 libJCC.so 或 JCC.sh"
+  echo "[閿欒] 缂哄皯 libJCC.so 鎴?JCC.sh"
   exit 1
 fi
 
-echo "[说明] 脚本会：强制停止游戏 → 自行拉起 → 等引擎 → 注入 → 扫表"
-echo "[说明] 请不要手动排队进局；停在登录页/大厅即可"
-echo "[说明] 终端会打印每一步状态"
+echo "[璇存槑] 鑴氭湰浼氾細寮哄埗鍋滄娓告垙 鈫?鑷鎷夎捣 鈫?绛夊紩鎿?鈫?娉ㄥ叆 鈫?鎵〃"
+echo "[璇存槑] 璇蜂笉瑕佹墜鍔ㄦ帓闃熻繘灞€锛涘仠鍦ㄧ櫥褰曢〉/澶у巺鍗冲彲"
+echo "[璇存槑] 缁堢浼氭墦鍗版瘡涓€姝ョ姸鎬?
 echo ""
 sleep 1
 
@@ -45,18 +45,19 @@ echo ""
 case "$RC" in
   0)
     echo "============================================"
-    echo "  已完成。请把文件夹发回电脑："
+    echo "  宸插畬鎴愩€傝鎶婃枃浠跺す鍙戝洖鐢佃剳锛?
     echo "  /sdcard/Download/jcc-scan/"
     echo "============================================"
     ;;
   5)
-    echo "注入校验失败（maps 无 libJCC / 无 SO 状态）。请把 inject_log.txt 发回。"
+    echo "娉ㄥ叆澶辫触锛歮aps 鏃?libJCC锛圝CC.sh 鐨勩€屾垚鍔熴€嶄笉鍙俊锛夈€?
+    echo "璇锋妸 host_progress.txt + inject_log.txt 鍙戝洖銆?
     ;;
   6)
-    echo "扫表超时。请把 status.txt / host_progress.txt 发回。"
+    echo "鎵〃瓒呮椂銆傝鎶?status.txt / host_progress.txt 鍙戝洖銆?
     ;;
   *)
-    echo "失败，退出码=$RC。请把该目录下日志发回："
+    echo "澶辫触锛岄€€鍑虹爜=$RC銆傝鎶婅鐩綍涓嬫棩蹇楀彂鍥烇細"
     echo "  /sdcard/Download/jcc-scan/"
     ;;
 esac

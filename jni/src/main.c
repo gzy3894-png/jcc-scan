@@ -8,6 +8,8 @@
  *
  * 终端输出全程进度，无 UI。
  */
+#include "inject_dlopen.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -442,49 +444,106 @@ static int wait_il2cpp(int pid, int max_sec) {
     return pidof_pkg();
 }
 
+static void copy_so_to_app_lib(void) {
+    /* JCC.sh 也拷到这里；自研注入用绝对路径，双份更稳 */
+    run_cmd("cp -f /data/local/tmp/libJCC.so /data/user/0/com.tencent.jkchess/libJCC.so 2>/dev/null; "
+            "chmod 755 /data/user/0/com.tencent.jkchess/libJCC.so 2>/dev/null; "
+            "for d in /data/user/*/com.tencent.jkchess; do "
+            "  [ -d \"$d\" ] || continue; "
+            "  cp -f /data/local/tmp/libJCC.so \"$d/libJCC.so\" 2>/dev/null; "
+            "  chmod 755 \"$d/libJCC.so\" 2>/dev/null; "
+            "done; true");
+}
+
+static int maps_libjcc(int pid) {
+    return maps_has_substr(pid, "libJCC.so") || maps_has_substr(pid, "libJCC") ||
+           maps_has_substr(pid, "/data/local/tmp/libJCC");
+}
+
 static int do_inject(int pid) {
-    char cmd[700];
     char logpath[320];
+    char err[256];
+    char cmd[700];
     FILE *lf;
+    int rc;
+    const char *paths[] = {
+        "/data/local/tmp/libJCC.so",
+        "/data/user/0/com.tencent.jkchess/libJCC.so",
+        0,
+    };
+    int i;
+
     snprintf(logpath, sizeof(logpath), "%s/inject_log.txt", g_out);
-
-    printf("[jcc-scan] 目标 PID=%d，开始 ptrace 注入...\n", pid);
-    fflush(stdout);
-    host_log("执行注入: nsenter + JCC.sh → dlopen libJCC.so");
-
-    /* 优先 nsenter 进 init 的 mount ns（2.5.0） */
-    snprintf(cmd, sizeof(cmd),
-             "nsenter -t 1 -m -- %s/%s >'%s' 2>&1; echo EXIT:$? >>'%s'", TMP_DIR, INJ_NAME,
-             logpath, logpath);
-    if (run_cmd(cmd) != 0) {
-        host_log("nsenter 路径返回非 0，尝试直接执行 JCC.sh...");
+    lf = fopen(logpath, "w");
+    if (lf) {
+        fprintf(lf, "jcc-scan inject log\nPID=%d\n", pid);
+        fclose(lf);
     }
 
-    /* 若日志无成功关键字，再直跑 */
-    if (!file_contains(logpath, "成功") && !file_contains(logpath, "SUCCEED") &&
-        !file_contains(logpath, "dlopen") && !file_contains(logpath, "OK")) {
-        snprintf(cmd, sizeof(cmd), "%s/%s >'%s' 2>&1; echo EXIT:$? >>'%s'", TMP_DIR, INJ_NAME,
+    printf("[jcc-scan] 目标 PID=%d\n", pid);
+    fflush(stdout);
+    copy_so_to_app_lib();
+
+    /* ========== 1) 自研 ptrace dlopen（真校验） ========== */
+    host_log("优先: 自研 ptrace 远程 dlopen...");
+    for (i = 0; paths[i]; i++) {
+        if (!file_exists(paths[i])) continue;
+        err[0] = 0;
+        printf("[jcc-scan] try dlopen %s\n", paths[i]);
+        fflush(stdout);
+        rc = jcc_inject_dlopen(pid, paths[i], err, sizeof(err));
+        {
+            FILE *f = fopen(logpath, "a");
+            if (f) {
+                fprintf(f, "[self-inject] path=%s rc=%d msg=%s\n", paths[i], rc, err);
+                fclose(f);
+            }
+        }
+        printf("[jcc-scan] self-inject: rc=%d %s\n", rc, err);
+        fflush(stdout);
+        if (rc == 0 && maps_libjcc(pid)) {
+            host_log("自研注入成功且 maps 可见 libJCC");
+            return 0;
+        }
+        if (rc == 0) {
+            host_log("自研 dlopen 返回 ok 但 maps 仍无 libJCC，继续尝试...");
+        }
+    }
+
+    /* ========== 2) 回退 JCC.sh（仅辅助，不信其「成功」文案） ========== */
+    host_log("回退: JCC.sh（其「注入成功」不可信，仍以 maps 为准）...");
+    snprintf(cmd, sizeof(cmd),
+             "nsenter -t 1 -m -- %s/%s >>'%s' 2>&1; echo EXIT:$? >>'%s'", TMP_DIR, INJ_NAME,
+             logpath, logpath);
+    run_cmd(cmd);
+    if (!maps_libjcc(pid)) {
+        snprintf(cmd, sizeof(cmd), "%s/%s >>'%s' 2>&1; echo EXIT:$? >>'%s'", TMP_DIR, INJ_NAME,
                  logpath, logpath);
         run_cmd(cmd);
     }
 
-    /* 打印注入日志摘要 */
-    lf = fopen(logpath, "r");
-    if (lf) {
-        char line[512];
-        int n = 0;
-        say("--- inject_log 摘要 ---");
-        while (fgets(line, sizeof(line), lf) && n < 40) {
-            fputs(line, stdout);
-            n++;
-        }
-        fclose(lf);
-        fflush(stdout);
-        say("--- end ---");
-    } else {
-        host_log("警告: 无 inject_log.txt");
+    say("--- inject_log ---");
+    {
+        char c[400];
+        snprintf(c, sizeof(c), "cat '%s' 2>/dev/null", logpath);
+        system(c);
     }
-    return 0;
+    say("--- end ---");
+
+    if (maps_libjcc(pid)) {
+        host_log("JCC.sh 后 maps 已有 libJCC");
+        return 0;
+    }
+
+    host_log("ERROR: 自研注入 + JCC.sh 后 maps 仍无 libJCC");
+    printf("[jcc-scan] maps 片段:\n");
+    {
+        char c[200];
+        snprintf(c, sizeof(c), "grep -iE 'libJCC|libil2cpp' /proc/%d/maps 2>/dev/null | head -20",
+                 pid);
+        system(c);
+    }
+    return -1;
 }
 
 /*
@@ -723,8 +782,12 @@ int main(int argc, char **argv) {
 
     /* [4] 注入 */
     step(4, STEPS, "ptrace 注入 libJCC.so");
-    do_inject(pid);
-    sleep(1); /* 给 constructor 一点时间 */
+    if (do_inject(pid) != 0) {
+        host_log("注入步骤失败（maps 无 libJCC）");
+        dump_diagnostics();
+        return 5;
+    }
+    sleep(2); /* 给 constructor / canary 一点时间 */
 
     /* [5] 校验 */
     step(5, STEPS, "校验注入状态");
