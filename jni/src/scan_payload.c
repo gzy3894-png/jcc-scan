@@ -60,22 +60,30 @@ static int pick_out(void) {
     return 1;
 }
 
+static void status_to(const char *path, const char *msg) {
+    FILE *f = fopen(path, "a");
+    if (!f) return;
+    fprintf(f, "[%ld] %s\n", (long)time(0), msg);
+    fflush(f);
+    fclose(f);
+}
+
 static void status(const char *msg) {
     char path[320];
-    FILE *f;
     LOGI("%s", msg);
-    snprintf(path, sizeof(path), "%s/status.txt", g_out);
-    f = fopen(path, "a");
-    if (f) {
-        fprintf(f, "[%ld] %s\n", (long)time(0), msg);
-        fclose(f);
+    /* 多路径写，方便外层主机轮询 */
+    if (g_out[0]) {
+        snprintf(path, sizeof(path), "%s/status.txt", g_out);
+        status_to(path, msg);
     }
     snprintf(path, sizeof(path), "%s/jcc_scan_status.txt", k_pkg_files);
-    f = fopen(path, "a");
-    if (f) {
-        fprintf(f, "[%ld] %s\n", (long)time(0), msg);
-        fclose(f);
-    }
+    status_to(path, msg);
+    snprintf(path, sizeof(path), "%s/jcc-scan/status.txt", k_pkg_files);
+    status_to(path, msg);
+    /* 再尝试 sdcard 固定路径（g_out 可能尚未选定） */
+    status_to("/sdcard/Download/jcc-scan/status.txt", msg);
+    status_to("/storage/emulated/0/Download/jcc-scan/status.txt", msg);
+    status_to("/data/local/tmp/jcc-scan-out/status.txt", msg);
 }
 
 static void init_api(void *handle) {
@@ -363,20 +371,14 @@ static void *boot_thread(void *arg) {
     int i;
     char buf[80];
     (void)arg;
-    pick_out();
-    {
-        char path[320];
-        FILE *f;
-        snprintf(path, sizeof(path), "%s/status.txt", g_out);
-        f = fopen(path, "w");
-        if (f) {
-            fprintf(f, "boot\n");
-            fclose(f);
-        }
-    }
-    status("waiting libil2cpp.so (可在大厅/对局中等待)");
 
-    for (i = 0; i < 240; i++) {
+    /* 尽早写 alive，给主机 verify_inject 用 */
+    status("constructor_thread_start");
+    pick_out();
+    status("boot");
+    status("waiting libil2cpp.so (请停在登录/大厅)");
+
+    for (i = 0; i < 180; i++) {
         void *h = xdl_open("libil2cpp.so", 0);
         if (h) {
             snprintf(buf, sizeof(buf), "found libil2cpp +%ds", i);
@@ -388,41 +390,51 @@ static void *boot_thread(void *arg) {
             }
             if (il2cpp_is_vm_thread) {
                 int w = 0;
-                while (!il2cpp_is_vm_thread(0) && w < 60) {
-                    status("wait il2cpp_init...");
+                while (!il2cpp_is_vm_thread(0) && w < 90) {
+                    if ((w % 5) == 0) {
+                        snprintf(buf, sizeof(buf), "wait il2cpp_init... %ds", w);
+                        status(buf);
+                    }
                     sleep(1);
                     w++;
                 }
             }
-            if (il2cpp_thread_attach && il2cpp_domain_get)
+            if (il2cpp_thread_attach && il2cpp_domain_get) {
                 il2cpp_thread_attach(il2cpp_domain_get());
+                status("il2cpp_thread_attach ok");
+            }
 
-            /* 多等一会让表/对局对象加载：先扫结构，再重试采样 */
-            status("delay 8s for tables...");
-            sleep(8);
+            /* 表加载：短延迟后扫一次；成功即 DONE，不必死等对局 */
+            status("delay 5s for tables...");
+            sleep(5);
             status("scanning structures...");
             do_scan();
+            status("first scan pass done");
 
-            /* 若 sample 可能空，对局中再扫一次 */
-            status("second pass in 45s (对局中数据更全)...");
-            sleep(45);
+            /* 轻量二扫：仅再等 20s，补充 sample_heroes */
+            status("optional second pass in 20s...");
+            sleep(20);
             status("second scan...");
             do_scan();
             status("all passes done");
             return 0;
         }
-        if (i % 15 == 0) {
-            snprintf(buf, sizeof(buf), "wait il2cpp %d/240", i);
+        if ((i % 5) == 0) {
+            snprintf(buf, sizeof(buf), "wait libil2cpp %d/180", i);
             status(buf);
         }
         sleep(1);
     }
-    status("FAIL libil2cpp not found");
+    status("FAIL libil2cpp not found in process");
     return 0;
 }
 
 __attribute__((constructor)) static void on_load(void) {
     pthread_t t;
+    /* constructor 同步先打点（maps 校验前可能已可见文件） */
+    status_to("/data/user/0/com.tencent.jkchess/files/jcc_scan_status.txt", "constructor_entered");
+    status_to("/sdcard/Download/jcc-scan/status.txt", "constructor_entered");
+    status_to("/data/local/tmp/jcc-scan-out/status.txt", "constructor_entered");
     LOGI("libJCC.so constructor (jcc-scan pure C)");
     pthread_create(&t, 0, boot_thread, 0);
     pthread_detach(t);

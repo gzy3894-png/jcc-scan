@@ -6,17 +6,18 @@
 
 1. 从 [Releases](../../releases) 下载 `jcc-scan-phone-arm64.zip`
 2. 解压到手机：`/sdcard/jcc-scan/`
-3. **打开金铲铲**
-4. Root 终端：
+3. Root 终端（**不要先开游戏**，脚本会自己拉起）：
 
 ```sh
 su
 sh /sdcard/jcc-scan/开始扫描.sh
 ```
 
-5. 进大厅或打一局，等到屏幕提示 **已完成**
-6. 把 `/sdcard/Download/jcc-scan/` **整个文件夹** 发回电脑  
-   （或电脑执行 `scripts/pull-to-pc.ps1`）
+4. 终端会打印：冷启动 → 等引擎 → 注入校验 → 扫表进度  
+5. 看到 **已完成** 后，把 `/sdcard/Download/jcc-scan/` 整夹发回电脑  
+   （或 `scripts/pull-to-pc.ps1`）
+
+**请停在登录页/大厅**，不要在排队加载时注入（脚本默认 force-stop 冷启动，对齐 2.5.0）。
 
 ## 结果文件
 
